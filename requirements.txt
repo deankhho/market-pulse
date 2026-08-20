@@ -1,3 +1,4 @@
 twchips @ git+https://github.com/catcat222222/twchips@010b4116149995704aba56db9cd2fd11ad157997
 pandas==3.0.5
 PyYAML==6.0.3
+pytest==9.1.1
