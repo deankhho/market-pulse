@@ -1,0 +1,15 @@
+# 台灣期貨交易所（TAIFEX）休市日曆 —— 人工維護
+#
+# 用途：`trading_days_until_expiry()`（Layer 1 contract_selection.py，Task 2/3）
+# 用這份清單排除非交易日，計算「到 expiry_date 之間還有幾個交易日」。
+#
+# 格式：ISO 日期字串陣列（YYYY-MM-DD），由呼叫端 yaml.safe_load 後自行轉換為
+# date 物件比對。只列「平日但休市」的日期（國定假日、颱風假、彈性放假等）；
+# 週六週日已經在 trading_days_until_expiry() 用 weekday() < 5 排除，不用重複列在這裡。
+#
+# 🔴 目前僅列出確定無疑義的日期（如元旦）。農曆春節、清明、端午、中秋等浮動假期
+# 與調整放假日尚未逐一核對官方 TAIFEX 公告年曆，Task 2 實作/測試
+# trading_days_until_expiry() 前，務必對照 TAIFEX 官網公告的完整年度休市日曆
+# 補齊，不要直接假設這份清單完整。
+holidays:
+  - "2026-01-01"  # 元旦
