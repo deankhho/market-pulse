@@ -26,12 +26,16 @@ EXPECTED_EXCEPTIONS = (
     NoValidContractError,
 )
 
-# validate_chain() 本身可能因為上游資料格式異常（非數字字串、無限值）而直接crash
-# （Task4審查兩度確認的已知限制：validate_chain對這類值只catch部分case，
-# 其餘會讓ValueError/OverflowError原生往外拋，牴觸它自己docstring承諾的
+# validate_chain() 本身可能因為上游資料格式異常而直接crash（Task4審查兩度確認的
+# 已知限制：非數字字串觸發ValueError、無限值觸發OverflowError，validate_chain對
+# 這類值只catch部分case，其餘會原生往外拋，牴觸它自己docstring承諾的
 # 「回傳值讓呼叫端判定state=error」）。這裡在Layer3的整合邊界把它們當成
 # 「資料本身壞掉」的預期內失敗處理，跟validate_chain回傳(False, reason)同一個
 # 語意分類，不當成「程式bug」讓它變成unexpected往外炸。
+# TypeError也一併攔下（防禦性）：屬於同一類「資料格式異常導致轉型失敗」，但
+# 不同於前兩者，Task4審查沒有實際重現過會觸發TypeError的具體輸入，這裡沒有
+# 對應測試——只是合理預期同一段程式碼也可能因為其他型別（如list/dict跑進float()）
+# 觸發TypeError，屬未驗證分支。
 VALIDATE_CRASH_EXCEPTIONS = (ValueError, OverflowError, TypeError)
 
 
