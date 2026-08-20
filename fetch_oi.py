@@ -1,7 +1,9 @@
 """Layer 3：唯一碰檔案/網路的地方。呼叫twchips→三態判斷→呼叫Layer1/2→寫兩份檔案。
 spec: Layer 3 定義 + 資料模型章節。"""
+import argparse
 import json
 import os
+import subprocess
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -150,7 +152,55 @@ def run(fetch_fn, data_dir: Path, holidays_path: Path, github_run_id: str) -> di
     return _log_and_return("ok", None, str(data_date))
 
 
+def _run_selftest() -> int:
+    """跑全部pytest，供人快速確認核心邏輯沒壞（spec: --selftest模式）。
+    用`sys.executable -m pytest`而非裸`pytest`：後者不會把repo根目錄加進
+    sys.path（沒有conftest.py/pytest.ini/pyproject.toml做這件事），子行程會
+    找不到`validate`/`fetch_oi`等同層模組（實測撞過ModuleNotFoundError）。"""
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(Path(__file__).parent / "tests"), "-v"],
+        check=False,
+    )
+    return result.returncode
+
+
+def _run_live_check() -> int:
+    """打一次真實twchips，驗證pin住的commit現在還能不能正確解析
+    （spec: --live模式，誠實定位是compatibility smoke test不是完整schema canary）。"""
+    from twchips import taifex
+
+    today = date.today()
+    try:
+        d = taifex.options_daily(today.isoformat(), product="TXO", session="regular")
+    except Exception as e:
+        print(f"❌ --live 失敗: {type(e).__name__}: {e}")
+        return 1
+
+    if d.empty:
+        print(f"⚠️ --live: {today} 回傳空資料（可能是非交易日或盤中尚未發布，"
+              f"這本身不算失敗，但確認一下今天日期是否合理）")
+        return 0
+
+    ok, reason = validate_chain(d, ABS_FLOOR)
+    if not ok:
+        print(f"❌ --live: 抓到資料但驗證不過: {reason}")
+        return 1
+
+    print(f"✅ --live 通過: {today} 抓到 {len(d)} 筆，欄位驗證正常")
+    return 0
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--selftest", action="store_true", help="跑全部單元測試")
+    parser.add_argument("--live", action="store_true", help="打真實twchips驗證pin版本可用")
+    args = parser.parse_args()
+
+    if args.selftest:
+        sys.exit(_run_selftest())
+    if args.live:
+        sys.exit(_run_live_check())
+
     from twchips import taifex
 
     def real_fetch(d):
