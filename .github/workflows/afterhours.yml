@@ -1,0 +1,41 @@
+name: market-pulse 盤後排程
+
+on:
+  # cron時間點抄自warrant-watchdog實際UTC時間（.github/workflows/afterhours.yml，
+  # cron: "10 7 * * 1-5"）：07:10 UTC = 15:10 台北，確保台灣期交所盤後資料已發布之後才跑
+  schedule:
+    - cron: "10 7 * * 1-5"  # 週一到五UTC 07:10（=台灣15:10）
+  workflow_dispatch: {}
+
+permissions:
+  contents: write  # 需要commit並push data/fetch_log.jsonl、data/oi_history.json、docs/index.html
+
+jobs:
+  fetch-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 裝依賴
+        run: pip install -r requirements.txt
+
+      - name: 抓資料（Layer 3）
+        run: python fetch_oi.py
+
+      - name: 產儀表板
+        run: python gen_dashboard.py
+
+      - name: 產LINE摘要
+        run: python build_line_summary.py
+
+      - name: 兩份資料檔＋docs一起commit push（原子性，spec明確要求）
+        run: |
+          git config user.name "market-pulse-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/fetch_log.jsonl data/oi_history.json docs/index.html data/line_latest.txt
+          git diff --staged --quiet || git commit -m "data: $(date -u +%Y-%m-%dT%H:%M:%SZ) 盤後更新"
+          git push
