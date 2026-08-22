@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from calendar_utils import load_holidays
-from contract_selection import NoValidContractError, select_contract
+from contract_selection import NoValidContractError, list_weekly_contracts, select_contract
 from market_observation import compute_observation
 from validate import ABS_FLOOR, validate_chain
 
@@ -57,6 +57,58 @@ def _load_oi_history(path: Path) -> dict:
 def _append_fetch_log(path: Path, entry: dict) -> None:
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _weekly_reason(call_missing: bool, put_missing: bool) -> str:
+    """spec: reason範本，固定文字、不含動態內容，避免長度/內容安全疑慮。"""
+    if call_missing and put_missing:
+        return "call/put兩邊都沒有任何列，無法計算wall"
+    if call_missing:
+        return "call邊沒有任何列，無法計算wall"
+    return "put邊沒有任何列，無法計算wall"
+
+
+def _process_weekly_contracts(chain_df: pd.DataFrame, weekly_list: list) -> dict:
+    """逐一處理list_weekly_contracts()回傳的每一檔週選，組出status三態
+    的觀測值dict。單一週選的問題（expiry_date=None異常或未預期例外）
+    只影響這一檔，不影響其他週選（spec: 例外分層原則，status三態）。"""
+    weekly = {}
+    for contract_month, expiry_date in weekly_list:
+        if expiry_date is None:
+            weekly[contract_month] = {
+                "status": "error",
+                "reason": "同一代號對應多個到期日，資料異常",
+            }
+            continue
+        try:
+            obs = compute_observation(chain_df, contract_month)
+        except Exception as e:
+            weekly[contract_month] = {
+                "status": "error",
+                "contract_expiry_date": str(expiry_date),
+                "reason": f"{type(e).__name__}: {str(e)[:100]}",
+            }
+            continue
+
+        call_missing = obs["call_wall"] is None
+        put_missing = obs["put_wall"] is None
+        if call_missing or put_missing:
+            weekly[contract_month] = {
+                "status": "incomplete",
+                "contract_expiry_date": str(expiry_date),
+                "reason": _weekly_reason(call_missing, put_missing),
+            }
+        else:
+            weekly[contract_month] = {
+                "status": "ok",
+                "contract_expiry_date": str(expiry_date),
+                "call_wall": obs["call_wall"],
+                "put_wall": obs["put_wall"],
+                "call_top3": obs["call_top3"],
+                "put_top3": obs["put_top3"],
+                "distribution": obs["distribution"],
+            }
+    return weekly
 
 
 def run(fetch_fn, data_dir: Path, holidays_path: Path, github_run_id: str) -> dict:

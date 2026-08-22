@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fetch_oi import run, UnexpectedFetchError
+from fetch_oi import run, UnexpectedFetchError, _process_weekly_contracts
 
 
 @pytest.fixture
@@ -171,3 +171,95 @@ def test_run_error_when_selected_contract_missing_one_side(tmp_data_dir):
     entry = run(fake_missing_put_fetch, tmp_data_dir, tmp_data_dir / "holidays.yaml", "run1")
     assert entry["state"] == "error"
     assert not (tmp_data_dir / "oi_history.json").exists()
+
+
+def test_process_weekly_contracts_status_ok(real_chain):
+    """真實fixture裡202608F3這檔call/put都有OI資料，應該是status=ok，
+    且完整帶出wall/top3/distribution。"""
+    weekly_list = [("202608F3", date(2026, 8, 21))]
+    result = _process_weekly_contracts(real_chain, weekly_list)
+
+    assert result["202608F3"]["status"] == "ok"
+    assert result["202608F3"]["contract_expiry_date"] == "2026-08-21"
+    assert "call_wall" in result["202608F3"]
+    assert "put_wall" in result["202608F3"]
+    assert "call_top3" in result["202608F3"]
+    assert "distribution" in result["202608F3"]
+    assert "reason" not in result["202608F3"]
+
+
+def test_process_weekly_contracts_status_error_on_ambiguous_expiry():
+    """expiry_date為None（同代號多到期日異常）→ status=error，
+    不呼叫compute_observation（不需要真的算wall）。"""
+    weekly_list = [("202608F3", None)]
+    result = _process_weekly_contracts(pd.DataFrame(), weekly_list)
+    assert result["202608F3"]["status"] == "error"
+    assert result["202608F3"]["reason"] == "同一代號對應多個到期日，資料異常"
+    assert "contract_expiry_date" not in result["202608F3"]
+
+
+def test_process_weekly_contracts_status_incomplete_on_missing_side():
+    """合約存在但某一邊沒有任何列（compute_observation正常回傳wall=None）
+    → status=incomplete，不是例外。"""
+    fake_chain = pd.DataFrame({
+        "到期月份(週別)": ["202608F3"],
+        "契約到期日": ["20260821"],
+        "履約價": [24000.0],
+        "買賣權": ["買權"],  # 只有call，沒有put
+        "未沖銷契約數": [100.0],
+    })
+    weekly_list = [("202608F3", date(2026, 8, 21))]
+    result = _process_weekly_contracts(fake_chain, weekly_list)
+    assert result["202608F3"]["status"] == "incomplete"
+    assert result["202608F3"]["reason"] == "put邊沒有任何列，無法計算wall"
+    assert result["202608F3"]["contract_expiry_date"] == "2026-08-21"
+    assert "call_wall" not in result["202608F3"]
+
+
+def test_process_weekly_contracts_status_error_on_unexpected_exception(monkeypatch, real_chain):
+    """處理某一檔週選時發生未預期例外（模擬程式bug，非wall=None情況）
+    → status=error，reason含例外類型，只影響這一檔，其他週選正常
+    （spec: 「不偷偷吞掉未預期例外」跟「單一週選隔離」要同時成立）。"""
+    import fetch_oi
+
+    call_count = {"n": 0}
+    original = fetch_oi.compute_observation
+
+    def maybe_boom(chain_df, contract_month):
+        call_count["n"] += 1
+        if contract_month == "202608F3":
+            raise KeyError("simulated bug")
+        return original(chain_df, contract_month)
+
+    monkeypatch.setattr(fetch_oi, "compute_observation", maybe_boom)
+
+    weekly_list = [
+        ("202608F3", date(2026, 8, 21)),
+        ("202608W4", date(2026, 8, 26)),
+    ]
+    result = _process_weekly_contracts(real_chain, weekly_list)
+
+    assert result["202608F3"]["status"] == "error"
+    assert "KeyError" in result["202608F3"]["reason"]
+    assert "simulated bug" in result["202608F3"]["reason"]
+    # 第二檔沒受影響，正常算出status=ok（W4這檔在fixture裡call/put都有OI）
+    assert result["202608W4"]["status"] == "ok"
+
+
+def test_process_weekly_contracts_status_incomplete_both_sides():
+    """雙邊都缺 → reason用「call/put兩邊都沒有任何列」範本，不是只提
+    其中一邊（spec: reason範本雙邊都None的情況）。"""
+    # chain_df裡完全沒有202608F3的任何列（只有另一個代號202609的一列，
+    # 確保chain_df不是完全空的DataFrame——欄位還在，只是這個代號沒有列）。
+    # 注意：brief原始寫法用pd.Series(dtype=...)混pd.concat組出空DataFrame，
+    # 在本專案pandas版本下建構期就ValueError（scalar長度1 vs 空index長度0
+    # 不相容），改用直接排除該代號的寫法達成同樣測試意圖。
+    fake_chain = pd.DataFrame({
+        "到期月份(週別)": ["202609"], "契約到期日": ["20260916"],
+        "履約價": [24000.0], "買賣權": ["買權"], "未沖銷契約數": [1.0],
+    })
+
+    weekly_list = [("202608F3", date(2026, 8, 21))]
+    result = _process_weekly_contracts(fake_chain, weekly_list)
+    assert result["202608F3"]["status"] == "incomplete"
+    assert result["202608F3"]["reason"] == "call/put兩邊都沒有任何列，無法計算wall"
