@@ -321,6 +321,35 @@ def test_process_weekly_contracts_status_error_on_unexpected_exception(monkeypat
     assert result["202608W4"]["status"] == "ok"
 
 
+# --- Finding 2 修復：list_weekly_contracts()/_process_weekly_contracts()對
+# 全新的（非「代號多到期日」那個既有sentinel case）畸形資料仍可能raise
+# （例如契約到期日不是合法%Y%m%d字串會讓pd.to_datetime丟ValueError），
+# run()對這個呼叫要包try/except，讓當天near_month記錄照樣寫入、weekly
+# 降級成{}，不能整天記錄都沒了。---
+
+def test_run_survives_unparseable_weekly_expiry_date(real_chain, tmp_data_dir):
+    """週選那一列的契約到期日欄位是無法解析的字串（如'N/A'），這會讓
+    list_weekly_contracts()內部pd.to_datetime(...)直接拋ValueError（不是
+    既有4輪外審已覆蓋的「同代號多到期日」sentinel case）。run()要把這個
+    例外攔下：near_month正常寫入、weekly降級成{}、整體state仍是ok。"""
+    bad_chain = real_chain.copy()
+    bad_chain["契約到期日"] = bad_chain["契約到期日"].astype(object)
+    bad_chain.loc[bad_chain["到期月份(週別)"] == "202608F3", "契約到期日"] = "N/A"
+
+    def fake_fetch(d):
+        return bad_chain
+
+    entry = run(fake_fetch, tmp_data_dir, tmp_data_dir / "holidays.yaml", "run1")
+
+    assert entry["state"] == "ok"
+    history = json.loads((tmp_data_dir / "oi_history.json").read_text())
+    record = history["2026-08-19"]
+    assert record["near_month"]["contract_month"] == "202609"
+    assert record["near_month"]["call_wall"] is not None
+    assert record["near_month"]["put_wall"] is not None
+    assert record["weekly"] == {}
+
+
 def test_process_weekly_contracts_status_incomplete_both_sides():
     """雙邊都缺 → reason用「call/put兩邊都沒有任何列」範本，不是只提
     其中一邊（spec: reason範本雙邊都None的情況）。"""

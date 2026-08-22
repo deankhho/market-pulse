@@ -190,8 +190,25 @@ def run(fetch_fn, data_dir: Path, holidays_path: Path, github_run_id: str) -> di
             str(data_date),
         )
 
-    weekly_list = list_weekly_contracts(chain_df, data_date)
-    weekly = _process_weekly_contracts(chain_df, weekly_list)
+    # list_weekly_contracts()對「同代號多到期日」異常已用None sentinel設計成
+    # 永不拋例外（4輪外審才收斂的既有設計，見contract_selection.py docstring），
+    # 但對其他未涵蓋的畸形資料（例如契約到期日不是合法%Y%m%d字串）仍可能拋
+    # ValueError/KeyError。近月觀測（observation，這條pipeline的主要目的）
+    # 這裡已經算完，若讓例外原生往外炸，會連同已經算好的近月資料一起賠掉
+    # ——牴觸Task2-4整套三態隔離設計的初衷（spec: 例外分層原則）。這裡在
+    # run()的整合邊界把它當成「週選這個附加功能本身失敗」，weekly降級為
+    # {}，near_month/state="ok"不受影響；_process_weekly_contracts()也一併
+    # 包進來防禦（雖然目前設計上不太可能單獨拋，但屬於同一批呼叫，防禦成本低）。
+    weekly_warning = None
+    try:
+        weekly_list = list_weekly_contracts(chain_df, data_date)
+        weekly = _process_weekly_contracts(chain_df, weekly_list)
+    except Exception as e:
+        weekly = {}
+        weekly_warning = (
+            f"週選處理發生例外，已降級為weekly={{}}（near_month不受影響）: "
+            f"{type(e).__name__}: {str(e)[:200]}"
+        )
 
     history = _load_oi_history(oi_history_path)
     history[str(data_date)] = {
@@ -212,7 +229,7 @@ def run(fetch_fn, data_dir: Path, holidays_path: Path, github_run_id: str) -> di
     }
     _atomic_write_json(oi_history_path, history)
 
-    return _log_and_return("ok", None, str(data_date))
+    return _log_and_return("ok", weekly_warning, str(data_date))
 
 
 def _run_selftest() -> int:
