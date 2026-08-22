@@ -1,12 +1,52 @@
-"""讀兩份資料檔（分開查詢，不共用同一個iterator——spec明確要求的實作陷阱提醒），
-產出docs/index.html。"""
+"""讀兩份資料檔（分開查詢，不共用同一個iterator——spec明確要求的實作陷阱
+提醒），產出docs/index.html。v5: 支援near_month/weekly巢狀結構，新增
+週選lifecycle標籤計算（唯一負責的地方，Task8複用這裡的結果）。"""
 import json
+from datetime import date as date_cls
 from pathlib import Path
 
 
+def _weekly_lifecycle(
+    today_weekly: dict, yesterday_weekly: dict,
+    today_date_str: str, yesterday_date_str: str | None,
+) -> dict:
+    """計算週選lifecycle標籤（持續/首次觀測到/依前次記錄推斷已到期/
+    前次記錄後消失原因不明）。status是次要註記，不是獨立分類——只要
+    key今天存在，一律走「持續」或「首次觀測到」，status=error不會被
+    誤判成消失（spec: lifecycle標籤章節，status三態的分類規則）。"""
+    today_date = date_cls.fromisoformat(today_date_str)
+    gap_days = (
+        (today_date - date_cls.fromisoformat(yesterday_date_str)).days
+        if yesterday_date_str else None
+    )
+
+    result = {}
+    for cm, rec in today_weekly.items():
+        lifecycle = "持續" if cm in yesterday_weekly else "首次觀測到"
+        entry = {**rec, "lifecycle": lifecycle}
+        if lifecycle == "持續" and gap_days and gap_days > 1:
+            entry["gap_days"] = gap_days
+        result[cm] = entry
+
+    for cm, rec in yesterday_weekly.items():
+        if cm in today_weekly:
+            continue
+        expiry_str = rec.get("contract_expiry_date")
+        if expiry_str and date_cls.fromisoformat(expiry_str) < today_date:
+            lifecycle = "依前次記錄推斷已到期"
+        else:
+            lifecycle = "前次記錄後消失（原因不明）"
+        result[cm] = {
+            "status": rec.get("status"),
+            "contract_expiry_date": expiry_str,
+            "lifecycle": lifecycle,
+        }
+    return result
+
+
 def build_dashboard_data(data_dir: Path) -> dict:
-    """組裝前端需要的資料。latest_observation跟latest_fetch_status是兩個獨立查詢
-    （spec: 第3輪外審ChatGPT指出這是實作時最容易誤植的地方）。"""
+    """組裝前端需要的資料。latest_observation跟latest_fetch_status是兩個
+    獨立查詢（spec: 第3輪外審ChatGPT指出這是實作時最容易誤植的地方）。"""
     history_path = data_dir / "oi_history.json"
     log_path = data_dir / "fetch_log.jsonl"
 
@@ -17,17 +57,31 @@ def build_dashboard_data(data_dir: Path) -> dict:
     sorted_dates = sorted(history.keys())
     latest_observation_date = sorted_dates[-1] if sorted_dates else None
 
-    # 換月事件偵測：逐日比對contract_month，不同就記一個rollover event，
-    # 該處趨勢線要中斷（spec: 換月標記章節，三輪外審三家收斂的最重要發現）
+    # 換月事件偵測：逐日比對近月contract_month，不同就記一個rollover event
     rollover_events = []
     for i in range(1, len(sorted_dates)):
         prev_date, cur_date = sorted_dates[i - 1], sorted_dates[i]
-        prev_month = history[prev_date]["contract_month"]
-        cur_month = history[cur_date]["contract_month"]
+        prev_month = history[prev_date]["near_month"]["contract_month"]
+        cur_month = history[cur_date]["near_month"]["contract_month"]
         if prev_month != cur_month:
             rollover_events.append({
                 "date": cur_date, "from_month": prev_month, "to_month": cur_month,
             })
+
+    weekly_lifecycle = {}
+    if sorted_dates:
+        idx = sorted_dates.index(latest_observation_date)
+        today_weekly = history[latest_observation_date].get("weekly", {})
+        if idx > 0:
+            prev_date = sorted_dates[idx - 1]
+            yesterday_weekly = history[prev_date].get("weekly", {})
+            weekly_lifecycle = _weekly_lifecycle(
+                today_weekly, yesterday_weekly, latest_observation_date, prev_date
+            )
+        else:
+            weekly_lifecycle = _weekly_lifecycle(
+                today_weekly, {}, latest_observation_date, None
+            )
 
     return {
         "history": history,
@@ -36,7 +90,35 @@ def build_dashboard_data(data_dir: Path) -> dict:
         "latest_fetch_state": latest_fetch["state"] if latest_fetch else None,
         "latest_fetch_reason": latest_fetch["reason"] if latest_fetch else None,
         "rollover_events": rollover_events,
+        "weekly_lifecycle": weekly_lifecycle,
     }
+
+
+def _sort_weekly_items(weekly_lifecycle: dict) -> list:
+    """依contract_expiry_date由小到大排序，同到期日依代號字串排序，
+    None(異常/未知)排最後（spec: 排序規則）。"""
+    def key(item):
+        cm, entry = item
+        expiry = entry.get("contract_expiry_date")
+        return (expiry is None, expiry or "9999-99-99", cm)
+    return sorted(weekly_lifecycle.items(), key=key)
+
+
+def _render_weekly_row(contract_month: str, entry: dict) -> str:
+    status = entry.get("status")
+    lifecycle = entry.get("lifecycle", "")
+    if status == "ok":
+        top3c = entry.get("call_top3", [])
+        top3p = entry.get("put_top3", [])
+        call_top2 = f"（次大 {top3c[1]}）" if len(top3c) >= 2 else ""
+        put_top2 = f"（次大 {top3p[1]}）" if len(top3p) >= 2 else ""
+        return (
+            f"<li>{contract_month}［{lifecycle}］"
+            f"Call {top3c[0] if top3c else '—'}{call_top2}／"
+            f"Put {top3p[0] if top3p else '—'}{put_top2}</li>"
+        )
+    reason = entry.get("reason", "")
+    return f"<li>{contract_month}［{lifecycle}／{status}］{reason}</li>"
 
 
 def render_html(data: dict) -> str:
@@ -50,7 +132,19 @@ def render_html(data: dict) -> str:
         )
     # non_trading 不顯示警示（正常現象，spec明確要求）
 
-    latest = data["history"].get(data["latest_observation_date"], {})
+    latest_record = data["history"].get(data["latest_observation_date"], {})
+    latest = latest_record.get("near_month", {})
+    call_top3 = latest.get("call_top3", [])
+    put_top3 = latest.get("put_top3", [])
+    call_top2 = f"（次大 {call_top3[1]}）" if len(call_top3) >= 2 else ""
+    put_top2 = f"（次大 {put_top3[1]}）" if len(put_top3) >= 2 else ""
+
+    weekly_lifecycle = data.get("weekly_lifecycle", {})
+    weekly_rows = "".join(
+        _render_weekly_row(cm, entry)
+        for cm, entry in _sort_weekly_items(weekly_lifecycle)
+    )
+    weekly_html = f"<ul>{weekly_rows}</ul>" if weekly_rows else "<p>（尚無週選資料）</p>"
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>大盤盤勢分析</title>
@@ -64,8 +158,11 @@ body {{ font-family: sans-serif; margin: 2em; }}
 <h1>大盤盤勢分析</h1>
 {warning_html}
 <p>最新可用資料日期：{data["latest_observation_date"] or "無資料"}</p>
-<p>Call OI集中履約價：{latest.get("call_wall", "—")}
-   Put OI集中履約價：{latest.get("put_wall", "—")}</p>
+<h2>近月</h2>
+<p>Call OI集中履約價：{call_top3[0] if call_top3 else "—"}{call_top2}
+   Put OI集中履約價：{put_top3[0] if put_top3 else "—"}{put_top2}</p>
+<h2>週選</h2>
+{weekly_html}
 <div id="chart"></div>
 <script>
 const rolloverEvents = {json.dumps(data["rollover_events"], ensure_ascii=False)};

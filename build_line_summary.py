@@ -14,7 +14,8 @@ def build_summary_text(data_dir: Path) -> str:
     data = build_dashboard_data(data_dir)
 
     if data["latest_fetch_state"] == "error":
-        latest = data["history"].get(data["latest_observation_date"], {})
+        latest_record = data["history"].get(data["latest_observation_date"], {})
+        latest = latest_record.get("near_month", {})
         return (
             f"⚠️ 今日抓取失敗，以下為 {data['latest_observation_date']} 資料\n"
             f"Call OI集中履約價：{latest.get('call_wall', '—')}\n"
@@ -27,10 +28,10 @@ def build_summary_text(data_dir: Path) -> str:
         return f"目前無可用資料。\n{DISCLAIMER}"
 
     latest_date = sorted_dates[-1]
-    latest = data["history"][latest_date]
+    latest = data["history"][latest_date]["near_month"]
 
     prev_date = sorted_dates[-2] if len(sorted_dates) >= 2 else None
-    prev = data["history"][prev_date] if prev_date else None
+    prev = data["history"][prev_date]["near_month"] if prev_date else None
 
     if prev is None:
         movement_line = "（首日資料，暫無前日可比）"
