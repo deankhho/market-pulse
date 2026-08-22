@@ -3,7 +3,7 @@ reply（比照hourly_report.py的--publish模式）。v5: 近月顯示top1+top2�
 新增週選區塊（複用gen_dashboard.py算好的lifecycle標籤，不重新實作）。"""
 from pathlib import Path
 
-from gen_dashboard import build_dashboard_data
+from gen_dashboard import TERMINAL_LIFECYCLES, build_dashboard_data
 
 DISCLAIMER = (
     "僅供市場結構觀察，非投資建議。wall 可能因少量 OI 差異而變動，"
@@ -19,6 +19,11 @@ def _top2_suffix(top3: list) -> str:
 def _format_weekly_line(contract_month: str, entry: dict) -> str:
     status = entry.get("status")
     lifecycle = entry.get("lifecycle", "")
+    if lifecycle in TERMINAL_LIFECYCLES:
+        # 終端態：合約今天已不存在，沒有Call/Put可顯示，不能落到ok/incomplete
+        # 分支去印出佔位符（Finding 1驗收標準，與gen_dashboard.py的HTML版本
+        # 對齊，兩邊都優先檢查lifecycle）。
+        return f"・{contract_month}[{lifecycle}]（已不在追蹤範圍，無最新資料）"
     if status == "ok":
         top3c = entry.get("call_top3", [])
         top3p = entry.get("put_top3", [])

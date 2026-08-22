@@ -1,5 +1,6 @@
 import json
-from build_line_summary import build_summary_text
+from build_line_summary import _format_weekly_line, build_summary_text
+from gen_dashboard import TERMINAL_LIFECYCLES
 
 def test_summary_same_month_reports_movement_and_top2(tmp_path):
     (tmp_path / "oi_history.json").write_text(json.dumps({
@@ -124,3 +125,63 @@ def test_summary_weekly_section_anomaly_prioritized_in_cap(tmp_path):
     text = build_summary_text(tmp_path)
     assert "202609W9" in text  # 消失的異常訊號被優先排進顯示範圍
     assert "等" in text and "檔（詳見儀表板）" in text
+
+
+# --- Finding 1 修復：LINE文字輸出同樣不能對終端態印出Call—／Put—佔位符 ---
+
+def test_format_weekly_line_terminal_lifecycle_has_no_placeholder():
+    """兩個終端態各自單獨測_format_weekly_line：不能印出Call—／Put—，
+    要印出有意義的內容（lifecycle標籤本身）。"""
+    for lifecycle in TERMINAL_LIFECYCLES:
+        entry = {"contract_expiry_date": "2026-08-20", "lifecycle": lifecycle}
+        line = _format_weekly_line("202608F3", entry)
+        assert "Call—" not in line
+        assert "Put—" not in line
+        assert lifecycle in line
+
+
+def test_summary_text_terminal_lifecycle_no_call_put_placeholder(tmp_path):
+    """端到端重現bug：兩檔週選昨天有、今天消失（一個已到期、一個消失
+    不明），完整走build_summary_text，確認LINE實際輸出文字沒有
+    Call—／Put—佔位符（Finding 1驗收標準）。"""
+    (tmp_path / "oi_history.json").write_text(json.dumps({
+        "2026-08-18": {
+            "schema_version": 2, "session": "regular",
+            "twchips_commit": "x", "pandas_version": "y",
+            "near_month": {
+                "contract_month": "202609", "call_wall": 50000, "put_wall": 40000,
+                "call_top3": [50000], "put_top3": [40000],
+                "distribution": {"call": {}, "put": {}},
+            },
+            "weekly": {
+                "202608F3": {"status": "ok", "contract_expiry_date": "2026-08-18",  # 今天已過期
+                              "call_wall": 24000, "put_wall": 23000,
+                              "call_top3": [24000], "put_top3": [23000],
+                              "distribution": {"call": {}, "put": {}}},
+                "202609W1": {"status": "ok", "contract_expiry_date": "2026-09-02",  # 還沒到期就消失
+                              "call_wall": 500, "put_wall": 400,
+                              "call_top3": [500], "put_top3": [400],
+                              "distribution": {"call": {}, "put": {}}},
+            },
+        },
+        "2026-08-19": {
+            "schema_version": 2, "session": "regular",
+            "twchips_commit": "x", "pandas_version": "y",
+            "near_month": {
+                "contract_month": "202609", "call_wall": 50100, "put_wall": 40100,
+                "call_top3": [50100], "put_top3": [40100],
+                "distribution": {"call": {}, "put": {}},
+            },
+            "weekly": {},  # 兩檔今天都不在了
+        },
+    }))
+    (tmp_path / "fetch_log.jsonl").write_text(
+        '{"fetch_id":"a","state":"ok","reason":null,"resolved_data_date":"2026-08-19"}\n'
+    )
+    text = build_summary_text(tmp_path)
+    # near_month本身有真實top3資料（非空），所以text裡唯一可能出現
+    # "Call—"／"Put—"的來源只會是週選終端態渲染錯誤（bug重現點）
+    assert "Call—" not in text
+    assert "Put—" not in text
+    assert "依前次記錄推斷已到期" in text
+    assert "前次記錄後消失（原因不明）" in text

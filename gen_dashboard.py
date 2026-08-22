@@ -5,6 +5,11 @@ import json
 from datetime import date as date_cls
 from pathlib import Path
 
+# 終端態：合約已不在今天資料中，沒有status概念可言（不是「今天資料有問題」，
+# 是「今天根本沒有這檔」）。渲染層要優先攔下這兩個值，不能落到status=="ok"
+# 分支去讀根本不存在的call_top3/put_top3（Finding 1修復）。
+TERMINAL_LIFECYCLES = ("依前次記錄推斷已到期", "前次記錄後消失（原因不明）")
+
 
 def _weekly_lifecycle(
     today_weekly: dict, yesterday_weekly: dict,
@@ -36,8 +41,10 @@ def _weekly_lifecycle(
             lifecycle = "依前次記錄推斷已到期"
         else:
             lifecycle = "前次記錄後消失（原因不明）"
+        # 不把昨天的status複製過來（Finding 1核心修復）：這兩種終端態合約
+        # 今天完全不存在，沒有call_top3/put_top3可言，"status"這個欄位在
+        # 這裡沒有意義——留著昨天的"ok"只會誤導下游渲染走ok分支。
         result[cm] = {
-            "status": rec.get("status"),
             "contract_expiry_date": expiry_str,
             "lifecycle": lifecycle,
         }
@@ -107,6 +114,10 @@ def _sort_weekly_items(weekly_lifecycle: dict) -> list:
 def _render_weekly_row(contract_month: str, entry: dict) -> str:
     status = entry.get("status")
     lifecycle = entry.get("lifecycle", "")
+    if lifecycle in TERMINAL_LIFECYCLES:
+        # 終端態：合約今天已不存在，沒有Call/Put可顯示，不能落到ok/incomplete
+        # 分支去印出佔位符或空白bracket（Finding 1驗收標準）。
+        return f"<li>{contract_month}［{lifecycle}］（已不在追蹤範圍，無最新Call/Put資料）</li>"
     if status == "ok":
         top3c = entry.get("call_top3", [])
         top3p = entry.get("put_top3", [])
