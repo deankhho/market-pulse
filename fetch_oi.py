@@ -190,14 +190,25 @@ def run(fetch_fn, data_dir: Path, holidays_path: Path, github_run_id: str) -> di
             str(data_date),
         )
 
+    weekly_list = list_weekly_contracts(chain_df, data_date)
+    weekly = _process_weekly_contracts(chain_df, weekly_list)
+
     history = _load_oi_history(oi_history_path)
     history[str(data_date)] = {
-        "contract_month": contract_month,
-        "contract_expiry_date": str(expiry_date),
+        "schema_version": 2,
         "session": "regular",
-        **observation,
         "twchips_commit": "010b4116149995704aba56db9cd2fd11ad157997",
         "pandas_version": pd.__version__,
+        "near_month": {
+            "contract_month": contract_month,
+            "contract_expiry_date": str(expiry_date),
+            "call_wall": observation["call_wall"],
+            "put_wall": observation["put_wall"],
+            "call_top3": observation["call_top3"],
+            "put_top3": observation["put_top3"],
+            "distribution": observation["distribution"],
+        },
+        "weekly": weekly,
     }
     _atomic_write_json(oi_history_path, history)
 

@@ -38,7 +38,7 @@ def test_run_ok_writes_both_files(real_chain, tmp_data_dir):
 
     history = json.loads((tmp_data_dir / "oi_history.json").read_text())
     assert "2026-08-19" in history
-    assert history["2026-08-19"]["contract_month"] == "202609"  # 202608到期週被排除
+    assert history["2026-08-19"]["near_month"]["contract_month"] == "202609"  # 202608到期週被排除
 
 
 def test_run_non_trading_when_empty_and_in_holidays(tmp_data_dir):
@@ -171,6 +171,81 @@ def test_run_error_when_selected_contract_missing_one_side(tmp_data_dir):
     entry = run(fake_missing_put_fetch, tmp_data_dir, tmp_data_dir / "holidays.yaml", "run1")
     assert entry["state"] == "error"
     assert not (tmp_data_dir / "oi_history.json").exists()
+
+
+def test_run_ok_writes_nested_schema_with_weekly(real_chain, tmp_data_dir):
+    """成功路徑：near_month照舊寫入，weekly裡4檔（8/19真實fixture查證過
+    的202608F3/W4/F4、202609W1）全部status=ok（fixture裡這4檔call/put都
+    有OI資料），schema_version/session/twchips_commit/pandas_version在
+    頂層，不在near_month或weekly底下。"""
+    def fake_fetch(d):
+        return real_chain
+
+    run(fake_fetch, tmp_data_dir, tmp_data_dir / "holidays.yaml", "run1")
+
+    history = json.loads((tmp_data_dir / "oi_history.json").read_text())
+    record = history["2026-08-19"]
+
+    assert record["schema_version"] == 2
+    assert "session" in record
+    assert "twchips_commit" in record
+    assert "pandas_version" in record
+    assert "session" not in record["near_month"]
+    assert "twchips_commit" not in record["near_month"]
+
+    assert record["near_month"]["contract_month"] == "202609"
+
+    weekly = record["weekly"]
+    assert set(weekly.keys()) == {"202608F3", "202608W4", "202608F4", "202609W1"}
+    for cm in weekly:
+        assert weekly[cm]["status"] == "ok"
+        assert "call_wall" in weekly[cm]
+
+
+def test_run_weekly_error_does_not_affect_near_month_or_other_weekly(monkeypatch, real_chain, tmp_data_dir):
+    """單一週選處理失敗（模擬程式bug）→ 整個run()仍然成功寫入，近月
+    資料完整，其他週選正常，只有出包那一檔標status=error（spec:
+    「單一週選錯誤不影響整體」的端到端驗證）。"""
+    import fetch_oi
+
+    original = fetch_oi.compute_observation
+
+    def selective_boom(chain_df, contract_month):
+        if contract_month == "202608F3":
+            raise KeyError("simulated bug")
+        return original(chain_df, contract_month)
+
+    monkeypatch.setattr(fetch_oi, "compute_observation", selective_boom)
+
+    def fake_fetch(d):
+        return real_chain
+
+    entry = run(fake_fetch, tmp_data_dir, tmp_data_dir / "holidays.yaml", "run1")
+
+    assert entry["state"] == "ok"  # 整體run()仍然成功
+    history = json.loads((tmp_data_dir / "oi_history.json").read_text())
+    record = history["2026-08-19"]
+    assert record["near_month"]["contract_month"] == "202609"  # 近月不受影響
+    assert record["weekly"]["202608F3"]["status"] == "error"
+    assert record["weekly"]["202608W4"]["status"] == "ok"  # 其他週選正常
+
+
+def test_run_lifecycle_invariant_holds_with_nested_schema(real_chain, tmp_data_dir):
+    """既有lifecycle invariant（error事件不覆寫已成功寫入的資料）在新的
+    巢狀格式下仍然成立——這是Task6就審查過的既有規則，這裡確認schema
+    改變後沒有退化。"""
+    def ok_fetch(d):
+        return real_chain
+
+    run(ok_fetch, tmp_data_dir, tmp_data_dir / "holidays.yaml", "run1")
+    history_after_ok = json.loads((tmp_data_dir / "oi_history.json").read_text())
+
+    def fail_fetch(d):
+        raise ConnectionError("模擬網路失敗")
+
+    run(fail_fetch, tmp_data_dir, tmp_data_dir / "holidays.yaml", "run2")
+    history_after_error = json.loads((tmp_data_dir / "oi_history.json").read_text())
+    assert history_after_error == history_after_ok
 
 
 def test_process_weekly_contracts_status_ok(real_chain):
