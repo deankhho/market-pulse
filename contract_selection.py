@@ -83,3 +83,48 @@ def select_contract(
         last["expiry_date"],
         f"所有候選都在到期週內，退回選最遠到期日的 {last['到期月份(週別)']}",
     )
+
+
+def list_weekly_contracts(
+    chain_df: pd.DataFrame, data_date: date
+) -> list[tuple[str, date | None]]:
+    """列出當天所有未到期的週選合約，依到期日→代號排序（到期日為None的
+    異常項排最後）。回傳 [(contract_month, expiry_date), ...]，永遠正常
+    回傳，不拋例外（spec v5核心修正：4輪外審才收斂到這個設計——若在這裡
+    拋例外，函式連其他正常週選都回傳不了）。
+
+    週選判定：到期月份(週別)不符合MONTHLY_SERIES_RE。
+    未到期判定：契約到期日 >= data_date（跟select_contract同一個invariant）。
+    同一代號對應多個不同到期日 → expiry_date回傳None（異常sentinel，
+    由呼叫端fetch_oi.py的per-contract迴圈判斷並標status="error"）。
+    """
+    series_col = chain_df["到期月份(週別)"].astype(str)
+    is_weekly = ~series_col.str.match(MONTHLY_SERIES_RE)
+    weekly_rows = chain_df[is_weekly]
+
+    if weekly_rows.empty:
+        return []
+
+    candidates = (
+        weekly_rows[["到期月份(週別)", "契約到期日"]]
+        .drop_duplicates()
+        .assign(
+            expiry_date=lambda df: pd.to_datetime(
+                df["契約到期日"].astype(str), format="%Y%m%d"
+            ).dt.date
+        )
+    )
+
+    results: list[tuple[str, date | None]] = []
+    for contract_month, group in candidates.groupby("到期月份(週別)"):
+        unique_expiries = group["expiry_date"].unique()
+        if len(unique_expiries) > 1:
+            results.append((contract_month, None))
+            continue
+        expiry_date = unique_expiries[0]
+        if expiry_date >= data_date:
+            results.append((contract_month, expiry_date))
+        # expiry_date < data_date：已到期，不列入清單
+
+    results.sort(key=lambda x: (x[1] is None, x[1] or date.max, x[0]))
+    return results

@@ -62,3 +62,64 @@ def test_select_contract_raises_when_all_expired():
     })
     with pytest.raises(NoValidContractError):
         select_contract(fake_chain, date(2026, 8, 19), set())
+
+
+from contract_selection import list_weekly_contracts
+
+
+def test_list_weekly_contracts_returns_all_unexpired_sorted_by_expiry(real_chain):
+    """2026-08-19真實fixture查證過的週選清單：202608F3(8/21)、
+    202608W4(8/26)、202608F4(8/28)、202609W1(9/2)，全部未到期，
+    依到期日排序（不是代號字串排序）。"""
+    result = list_weekly_contracts(real_chain, date(2026, 8, 19))
+    assert [cm for cm, _ in result] == [
+        "202608F3", "202608W4", "202608F4", "202609W1",
+    ]
+    assert result[0] == ("202608F3", date(2026, 8, 21))
+    assert result[1] == ("202608W4", date(2026, 8, 26))
+    assert result[2] == ("202608F4", date(2026, 8, 28))
+    assert result[3] == ("202609W1", date(2026, 9, 2))
+
+
+def test_list_weekly_contracts_excludes_expired():
+    """契約到期日 < data_date 的週選不列入清單。"""
+    fake_chain = pd.DataFrame({
+        "到期月份(週別)": ["202608F3", "202608F4"],
+        "契約到期日": ["20260810", "20260828"],  # F3已過期(8/10 < 8/19)
+    })
+    result = list_weekly_contracts(fake_chain, date(2026, 8, 19))
+    assert [cm for cm, _ in result] == ["202608F4"]
+
+
+def test_list_weekly_contracts_empty_when_no_weekly_series():
+    """全是月選、沒有任何週選 → 回傳空列表（不拋例外）。"""
+    fake_chain = pd.DataFrame({
+        "到期月份(週別)": ["202609", "202610"],
+        "契約到期日": ["20260916", "20261021"],
+    })
+    result = list_weekly_contracts(fake_chain, date(2026, 8, 19))
+    assert result == []
+
+
+def test_list_weekly_contracts_ambiguous_expiry_returns_none_not_exception():
+    """同一代號對應兩個不同到期日 → 該筆expiry_date回傳None，函式本身
+    仍正常回傳、不拋例外，其他正常週選不受影響（spec v5核心修正）。"""
+    fake_chain = pd.DataFrame({
+        "到期月份(週別)": ["202608F3", "202608F3", "202608F4"],
+        "契約到期日": ["20260821", "20260822", "20260828"],  # F3有兩個不同到期日
+    })
+    result = list_weekly_contracts(fake_chain, date(2026, 8, 19))
+    result_dict = dict(result)
+    assert result_dict["202608F3"] is None
+    assert result_dict["202608F4"] == date(2026, 8, 28)
+
+
+def test_list_weekly_contracts_ambiguous_sorted_last():
+    """expiry_date為None的異常項排在正常項後面。"""
+    fake_chain = pd.DataFrame({
+        "到期月份(週別)": ["202608F3", "202608F3", "202609W1"],
+        "契約到期日": ["20260821", "20260822", "20260902"],
+    })
+    result = list_weekly_contracts(fake_chain, date(2026, 8, 19))
+    assert result[-1][0] == "202608F3"
+    assert result[-1][1] is None
