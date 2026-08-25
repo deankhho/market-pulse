@@ -2,3 +2,4 @@
 {"fetch_id": "2026-08-21T14:28:17.555649+00:00-32492274451", "fetched_at_utc": "2026-08-21T14:28:17.555649+00:00", "state": "ok", "reason": null, "resolved_data_date": "2026-08-21"}
 {"fetch_id": "2026-08-22T14:06:31.052909+00:00-local", "fetched_at_utc": "2026-08-22T14:06:31.052909+00:00", "state": "error", "reason": "2026-08-22 不在holidays.yaml清單內卻回傳空資料，可能是上游異常", "resolved_data_date": null}
 {"fetch_id": "2026-08-24T08:02:48.358486+00:00-32704299466", "fetched_at_utc": "2026-08-24T08:02:48.358486+00:00", "state": "ok", "reason": null, "resolved_data_date": "2026-08-24"}
+{"fetch_id": "2026-08-25T07:55:02.930611+00:00-32823912740", "fetched_at_utc": "2026-08-25T07:55:02.930611+00:00", "state": "ok", "reason": null, "resolved_data_date": "2026-08-25"}
