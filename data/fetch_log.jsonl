@@ -35,3 +35,4 @@
 {"fetch_id": "2026-10-06T14:08:29.642697+00:00-37476408458", "fetched_at_utc": "2026-10-06T14:08:29.642697+00:00", "state": "ok", "reason": null, "resolved_data_date": "2026-10-06"}
 {"fetch_id": "2026-10-07T14:27:14.863383+00:00-37636767162", "fetched_at_utc": "2026-10-07T14:27:14.863383+00:00", "state": "ok", "reason": null, "resolved_data_date": "2026-10-07"}
 {"fetch_id": "2026-10-08T14:32:25.665982+00:00-37793246611", "fetched_at_utc": "2026-10-08T14:32:25.665982+00:00", "state": "ok", "reason": null, "resolved_data_date": "2026-10-08"}
+{"fetch_id": "2026-10-09T14:19:53.226015+00:00-37943320393", "fetched_at_utc": "2026-10-09T14:19:53.226015+00:00", "state": "non_trading", "reason": null, "resolved_data_date": null}
